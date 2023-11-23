@@ -1,3 +1,6 @@
+import os
+import pickle
+from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
@@ -10,22 +13,46 @@ from langchain.chains import ConversationalRetrievalChain
 from htmlTemplates import css, bot_template, user_template
 from langchain.llms import HuggingFaceHub
 
+class PersistentVectorStore:
+    def __init__(self, storage_path="vectorstore.pkl"):
+        self.storage_path = Path(storage_path)
+        self.vectorstore = None
+        self.load_vectorstore()
+
+    def get_vectorstore(self, text_chunks, force_refresh=False):
+        if self.vectorstore is None or force_refresh:
+            embeddings = OpenAIEmbeddings()
+            # embeddings = HuggingFaceInstructEmbeddings(model_name="hkunlp/instructor-xl")
+            self.vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
+            self.save_vectorstore()
+        return self.vectorstore
+
+    def load_vectorstore(self):
+        if self.storage_path.exists():
+            with open(self.storage_path, "rb") as file:
+                self.vectorstore = pickle.load(file)
+
+    def save_vectorstore(self):
+        with open(self.storage_path, "wb") as file:
+            pickle.dump(self.vectorstore, file)
+
+
 def get_pdf_text(pdf_docs):
     text = ""
     for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
+#        pdf_reader = PdfReader(pdf)
+        with open(pdf, 'rb') as f:
+           pdf_reader = PdfReader(f)
+
         for page in pdf_reader.pages:
             text += page.extract_text()
     return text
 
-
 def get_text_chunks(text):
     text_splitter = CharacterTextSplitter(
         separator="\n",
-#        chunk_size=1000,
-#        chunk_overlap=200,
-        chunk_size=100,
-        chunk_overlap=5,
+        chunk_size=1000,
+        chunk_overlap=200,
         length_function=len
     )
     chunks = text_splitter.split_text(text)
@@ -66,6 +93,17 @@ def handle_userinput(user_question):
                 "{{MSG}}", message.content), unsafe_allow_html=True)
 
 
+# Function to read multiple PDF files and return them as a list
+def read_pdf_files_from_directory(directory):
+    pdf_docs = []
+    for file in os.listdir(directory):
+        if file.endswith('.pdf'):
+            file_path = os.path.join(directory, file)
+            with open(file_path, 'rb') as f:
+                pdf_docs.append(f.read())
+    return pdf_docs
+
+
 def main():
     load_dotenv()
     st.set_page_config(page_title="Chat with multiple PDFs",
@@ -82,25 +120,36 @@ def main():
     if user_question:
         handle_userinput(user_question)
 
+
+    # Directory where your PDFs are stored on the server
+    pdf_directory = '/home/ailab/pdf-demo/'
+
     with st.sidebar:
-        st.subheader("Your documents")
-        pdf_docs = st.file_uploader(
-            "Upload your PDFs here and click on 'Process'", accept_multiple_files=True)
-        if st.button("Process"):
-            with st.spinner("Processing"):
-                # get pdf text
-                raw_text = get_pdf_text(pdf_docs)
+      st.subheader("Les documents")
 
-                # get the text chunks
-                text_chunks = get_text_chunks(raw_text)
+      # Lister tous les fichiers dans le dossier
+      liste_fichiers = os.listdir(pdf_directory)
 
-                # create vector store
-                vectorstore = get_vectorstore(text_chunks)
+      # Afficher la liste des fichiers dans Streamlit
+#      st.write("Liste des fichiers :")
+      for fichier in liste_fichiers:
+        st.write(fichier)
 
-                # create conversation chain
-                st.session_state.conversation = get_conversation_chain(
-                    vectorstore)
 
+#      with st.spinner("Processing..."):
+
+    # Create vector store
+#        vectorstore = get_vectorstore(text_chunks)
+    with open("vectorstore.pkl", "rb") as file:
+      vectorstore = pickle.load(file)
+
+    # Create conversation chain
+    st.session_state.conversation = get_conversation_chain(vectorstore)
+
+#        st.success("success")
+
+#      else:
+#        st.write("No PDF files found in the specified directory.")
 
 if __name__ == '__main__':
     main()
